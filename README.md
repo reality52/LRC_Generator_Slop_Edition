@@ -1,7 +1,8 @@
 # LRC_Generator_Slop_Edition
 Generates .LRC formated text with the help of Demucs and Whisper.
-
+<img width="720" height="661" alt="Screenshot 2026-04-08 212702" src="https://github.com/user-attachments/assets/007f3e7d-0695-4be8-8b9c-0dd3da0bbc38" />
 # Lyrics Generator Slop Edition
+
 
 Десктопное приложение на Python для автоматического создания файлов субтитров (.lrc, .srt, .ass) из аудиофайлов с использованием нейросетей Whisper и Demucs.
 
