@@ -59,7 +59,7 @@ class LRCGeneratorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Lyrics Generator Slop Edition")
-        self.root.geometry("900x500")
+        self.root.geometry("900x550") # Увеличил высоту для галочки
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         if PYGAME_AVAILABLE:
@@ -70,6 +70,9 @@ class LRCGeneratorApp:
         self.abort_flag = False
         self.current_process = None 
         self.last_separated_path = ""
+        
+        # Директория для Demucs в папке пользователя (не требует прав админа)
+        self.demucs_out_dir = os.path.join(os.path.expanduser("~"), ".lrc_generator_separated")
         
         self.audio_path = tk.StringVar()
         self.model_size = tk.StringVar(value="small")
@@ -90,7 +93,7 @@ class LRCGeneratorApp:
         self.audio_length_sec = 0.0
         self.play_offset_sec = 0.0
         self.is_seeking = False
-        self.success_flag = False # Добавлен флаг успешного завершения
+        self.success_flag = False
         
         self.models_cache_path = self.get_whisper_cache_path()
         
@@ -102,8 +105,8 @@ class LRCGeneratorApp:
         if PYGAME_AVAILABLE:
             try: pygame.mixer.music.stop(); pygame.mixer.quit()
             except: pass
-        if os.path.exists("separated"):
-            try: shutil.rmtree("separated", ignore_errors=True)
+        if os.path.exists(self.demucs_out_dir):
+            try: shutil.rmtree(self.demucs_out_dir, ignore_errors=True)
             except: pass
         self.root.destroy()
 
@@ -115,9 +118,9 @@ class LRCGeneratorApp:
         if path and os.path.exists(path): os.startfile(path)
 
     def clear_demucs_folder(self):
-        if os.path.exists("separated"):
+        if os.path.exists(self.demucs_out_dir):
             try:
-                shutil.rmtree("separated", ignore_errors=True)
+                shutil.rmtree(self.demucs_out_dir, ignore_errors=True)
                 self.last_separated_path = ""
                 self.btn_open_folder.config(state=tk.DISABLED)
                 messagebox.showinfo("Очистка", "Рабочая папка Demucs очищена.")
@@ -166,7 +169,7 @@ class LRCGeneratorApp:
         d_box.pack(fill=tk.X, pady=2)
         chk_d = ttk.Checkbutton(d_box, text="Очистить вокал (htdemucs_ft)", variable=self.use_demucs)
         chk_d.pack(side=tk.LEFT)
-        self.btn_open_folder = ttk.Button(d_box, text="📂 Вокал", command=lambda: self.open_folder(self.last_separated_path), width=10, state=tk.DISABLED)
+        self.btn_open_folder = ttk.Button(d_box, text="📂 Вокал", command=lambda: self.open_folder(self.last_separated_path), width=8, state=tk.DISABLED)
         self.btn_open_folder.pack(side=tk.RIGHT, padx=2)
         Tooltip(self.btn_open_folder, "Открыть рабочую папку Demucs, где находятся разделённый вокал и инструментал, доступные после обработки")
         self.btn_clear_demucs = ttk.Button(d_box, text="🗑 Очистить", command=self.clear_demucs_folder, width=12)
@@ -190,7 +193,7 @@ class LRCGeneratorApp:
         w_cache_frame.pack(side=tk.TOP, anchor=tk.E, padx=5, pady=2)
         btn_open_cache = ttk.Button(w_cache_frame, text="📂 Кэш моделей", command=lambda: self.open_folder(self.models_cache_path), width=15)
         btn_open_cache.pack(side=tk.RIGHT, padx=2)
-        Tooltip(btn_open_cache, "Очистить локальный кэш скачаных моделей Whisper")
+        Tooltip(btn_open_cache, "Открыть локальный кэш скачаных моделей Whisper")
         btn_clear_cache = ttk.Button(w_cache_frame, text="🗑 Очистить", command=self.delete_models, width=12)
         btn_clear_cache.pack(side=tk.RIGHT, padx=2)
         Tooltip(btn_clear_cache, "Очистить ВЕСЬ локальный кэш скачаных моделей Whisper, если что-то идет не так или не хватает места.")
@@ -203,7 +206,7 @@ class LRCGeneratorApp:
         m_box.pack(fill=tk.X, pady=2)
         m_grid = ttk.Frame(m_box)
         m_grid.pack(fill=tk.X)
-        fields = [("Трек:", self.track_title), ("Артист:", self.artist), ("Альбом:", self.album), ("Создано:", self.created_by)]
+        fields = [("Трек:", self.track_title), ("Артист:", self.artist), ("Альбом:", self.album), ("Создатель:", self.created_by)]
         for i, (lbl, var) in enumerate(fields):
             ttk.Label(m_grid, text=lbl).grid(row=i, column=0, sticky=tk.W)
             ttk.Entry(m_grid, textvariable=var).grid(row=i, column=1, sticky=tk.EW, padx=5, pady=1)
@@ -211,6 +214,11 @@ class LRCGeneratorApp:
 
         cuda_text = f"✅ CUDA: {torch.cuda.get_device_name(0)}" if torch.cuda.is_available() else "❌ CUDA: Не найдено (Работаем на CPU)"
         ttk.Label(m_box, text=cuda_text, font=("Arial", 8, "bold")).pack(anchor=tk.W, pady=2)
+        
+        # Возвращаем галочку для метаданных
+        chk_m = ttk.Checkbutton(m_box, text="Добавлять теги в шапку файла", variable=self.include_meta)
+        chk_m.pack(anchor=tk.W)
+        Tooltip(chk_m, "Если включено, в начале файла будут строки типа [ar:Artist] [ti:Title]")
 
         # 5. Управление
         action_frame = ttk.Frame(left_panel)
@@ -249,9 +257,13 @@ class LRCGeneratorApp:
         self.lbl_time = ttk.Label(p_frame, text="00:00 / 00:00", font=("Consolas", 10))
         self.lbl_time.pack(side=tk.RIGHT)
 
-        ttk.Button(right_panel, text="💾 СОХРАНИТЬ ФАЙЛ", command=self.save_file_dialog).pack(fill=tk.X, pady=(5, 5))
+        ttk.Button(right_panel, text="💾 СОХРАНИТЬ ФАЙЛ", command=self.save_file_dialog).pack(fill=tk.X, pady=(5, 0))
 
     def select_file(self):
+        # Останавливаем воспроизведение старого файла
+        if PYGAME_AVAILABLE:
+            self.stop_audio()
+            
         fn = filedialog.askopenfilename(filetypes=[("Аудио", "*.mp3 *.wav *.m4a *.flac *.ogg")])
         if fn:
             self.audio_path.set(fn)
@@ -262,6 +274,11 @@ class LRCGeneratorApp:
         try:
             ext = os.path.splitext(path)[1].lower()
             audio = None
+            
+            # Сброс старых данных перед чтением
+            self.audio_length_sec = 0.0
+            
+            # Распознавание форматов
             if ext == '.mp3':
                 audio = MP3(path)
                 self.track_title.set(audio.get('TIT2', [''])[0])
@@ -269,20 +286,65 @@ class LRCGeneratorApp:
             elif ext in ['.m4a', '.mp4']:
                 audio = EasyMP4(path)
                 self.track_title.set(audio.get('title', [''])[0])
+            elif ext == '.flac':
+                audio = FLAC(path)
+                self.track_title.set(audio.get('title', [os.path.basename(path)])[0])
+                self.artist.set(audio.get('artist', [''])[0])
+            elif ext == '.wav':
+                audio = WAVE(path)
+            elif ext == '.ogg':
+                audio = OggVorbis(path)
             
+            # ОБЩИЙ БЛОК: выполняется для любого успешно открытого файла
             if audio:
                 self.audio_length_sec = audio.info.length
+                # Обновляем ползунок и текст времени
+                self.seekbar.config(to=self.audio_length_sec)
+                self.seek_var.set(0) # Сброс ползунка в начало
+                self.lbl_time.config(text=f"00:00 / {self.format_time_short(self.audio_length_sec)}")
+                
+                # Активация кнопок
+                self.btn_play.config(state=tk.NORMAL)
+                self.btn_stop_music.config(state=tk.NORMAL)
+                self.btn_pause.config(state=tk.DISABLED) # Пауза пока не нужна
+                
+                # Очистка старого текста (опционально, для чистоты)
+                self.text_output.delete(1.0, tk.END)
+                self.segments_data = []
+        except Exception as e: 
+            print(f"Ошибка чтения метаданных: {e}")
+            # 3. Обновление интерфейса, если файл успешно прочитан
+            if audio:
+                self.audio_length_sec = audio.info.length
+                
+                # Обновляем ползунок и текст времени
                 self.seekbar.config(to=self.audio_length_sec)
                 self.lbl_time.config(text=f"00:00 / {self.format_time_short(self.audio_length_sec)}")
+                
+                # Активируем кнопки управления плеером
                 self.btn_play.config(state=tk.NORMAL)
-        except: pass
+                self.btn_stop_music.config(state=tk.NORMAL)
+                self.btn_pause.config(state=tk.DISABLED)
+                
+                # Очищаем старые данные сегментов от предыдущего файла
+                self.segments_data = []
+                
+        except Exception as e:
+            # Если возникла ошибка (например, файл поврежден), выводим её в консоль для отладки
+            print(f"Ошибка чтения метаданных: {e}")
 
     def start_processing(self):
         path = self.audio_path.get()
         if not path or not os.path.exists(path): return
+        
+        # Очистка временной папки перед стартом
+        if os.path.exists(self.demucs_out_dir):
+            try: shutil.rmtree(self.demucs_out_dir, ignore_errors=True)
+            except: pass
+            
         self.processing = True
         self.abort_flag = False
-        self.success_flag = False # Сбрасываем флаг успешного завершения при старте
+        self.success_flag = False
         self.btn_process.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
         self.progress_bar.start(10)
@@ -292,11 +354,13 @@ class LRCGeneratorApp:
         target = audio_path
         device = "cuda" if torch.cuda.is_available() else "cpu"
         try:
+            # 1. Этап Demucs
             if self.use_demucs.get():
                 if self.abort_flag: return
                 self.root.after(0, lambda: self.status_label.config(text="Demucs: Выделение речи...", foreground="orange"))
                 
-                cmd = [sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs_ft", "--shifts", "1", audio_path]
+                # Добавлен флаг -o для указания пути без прав администратора
+                cmd = [sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs_ft", "--shifts", "1", "-o", self.demucs_out_dir, audio_path]
                 self.current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 
                 while self.current_process.poll() is None:
@@ -306,12 +370,13 @@ class LRCGeneratorApp:
                     self.root.update_idletasks()
                 
                 base = os.path.splitext(os.path.basename(audio_path))[0]
-                self.last_separated_path = os.path.abspath(os.path.join("separated", "htdemucs_ft", base))
+                self.last_separated_path = os.path.abspath(os.path.join(self.demucs_out_dir, "htdemucs_ft", base))
                 v_file = os.path.join(self.last_separated_path, "vocals.wav")
                 if os.path.exists(v_file): 
                     target = v_file
                     self.root.after(0, lambda: self.btn_open_folder.config(state=tk.NORMAL))
 
+            # 2. Этап Whisper
             if self.abort_flag: return
             self.root.after(0, lambda: self.status_label.config(text=f"Whisper: Загрузка модели... Если в кэше пусто то это может занять немало времени...", foreground="blue"))
             
@@ -356,7 +421,7 @@ class LRCGeneratorApp:
         self.reset_ui()
 
     def finish_success(self):
-        self.success_flag = True # Отмечаем успешное завершение
+        self.success_flag = True 
         self.text_output.delete(1.0, tk.END)
         lrc_lines = [f"[{self.format_timestamp_lrc(s['start'])}] {s['text']}" for s in self.segments_data]
         self.text_output.insert(tk.END, "\n".join(lrc_lines))
@@ -369,7 +434,6 @@ class LRCGeneratorApp:
         self.btn_process.config(state=tk.NORMAL)
         self.btn_stop.config(state=tk.DISABLED)
         
-        # Интеллектуальный сброс статуса
         if self.abort_flag:
             self.status_label.config(text="Прервано пользователем!", foreground="red")
         elif getattr(self, 'success_flag', False):
@@ -452,14 +516,46 @@ class LRCGeneratorApp:
         else:
             self.lbl_time.config(text=f"{self.format_time_short(self.play_offset_sec)} / {self.format_time_short(self.audio_length_sec)}")
 
-    def format_timestamp_lrc(self, sec): return f"{int(max(0,sec)//60):02d}:{sec%60:05.2f}"
+    def format_timestamp_lrc(self, sec):
+        """Форматирует секунды в стандарт LRC: [mm:ss.xx]"""
+        minutes = int(max(0, sec) // 60)
+        seconds = sec % 60
+        # LRC обычно использует 2 знака после запятой для сотых долей секунды
+        return f"{minutes:02d}:{seconds:05.2f}"
+    
     def format_time_short(self, sec): return f"{int(max(0,sec)//60):02d}:{int(max(0,sec)%60):02d}"
 
     def save_file_dialog(self):
-        fpath = filedialog.asksaveasfilename(defaultextension=".lrc", filetypes=[("LRC", "*.lrc"), ("SRT", "*.srt"), ("TXT", "*.txt")])
-        if fpath:
-            with open(fpath, 'w', encoding='utf-8') as f: f.write(self.text_output.get(1.0, tk.END))
-            messagebox.showinfo("OK", "Сохранено!")
+        fpath = filedialog.asksaveasfilename(
+            defaultextension=".lrc",
+            filetypes=[("LRC Lyrics", "*.lrc"), ("SubRip Subtitles", "*.srt"), ("Plain Text", "*.txt")]
+        )
+        if not fpath:
+            return
+
+        try:
+            content = ""
+            # Если выбран LRC, добавляем расширенные метаданные
+            if fpath.lower().endswith(".lrc"):
+                meta = []
+                if self.include_meta.get():
+                    if self.track_title.get(): meta.append(f"[ti:{self.track_title.get()}]")
+                    if self.artist.get(): meta.append(f"[ar:{self.artist.get()}]")
+                    if self.album.get(): meta.append(f"[al:{self.album.get()}]")
+                    meta.append(f"[by:{self.created_by.get()}]")
+                    meta.append(f"[offset:{self.offset.get()}]")
+                    content = "\n".join(meta) + "\n\n"
+            
+            # Получаем текст из редактора
+            main_text = self.text_output.get(1.0, tk.END).strip()
+            content += main_text
+
+            with open(fpath, 'w', encoding='utf-8-sig') as f: # utf-8-sig для лучшей совместимости с Windows
+                f.write(content)
+            
+            messagebox.showinfo("Успех", f"Файл успешно сохранен:\n{os.path.basename(fpath)}")
+        except Exception as e:
+            messagebox.showerror("Ошибка сохранения", f"Не удалось сохранить файл: {e}")
 
     def delete_models(self):
         if messagebox.askyesno("?", "Удалить кэш моделей whisper? В случае повторного использования выбранную модель придется выкачивать из Интернета."):
